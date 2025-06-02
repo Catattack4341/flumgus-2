@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Flungus 2 - Upward Launch</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: skyblue;
+    font-family: sans-serif;
+  }
+  canvas {
+    display: block;
+  }
+  #launchButton, #shopButton {
+    position: absolute;
+    bottom: 10px;
+    padding: 6px 12px;
+    font-size: 16px;
+    background-color: lightgreen;
+    border: 2px solid green;
+    cursor: pointer;
+    user-select: none;
+    display: none;
+    z-index: 10;
+  }
+  #launchButton {
+    left: 50%;
+    transform: translateX(-50%);
+  }
+  #shopButton {
+    left: 10px;
+  }
+  #coinDisplay, #distanceDisplay {
+    position: absolute;
+    top: 10px;
+    background: white;
+    border: 1px solid gray;
+    padding: 4px 8px;
+    font-size: 18px;
+    user-select: none;
+    z-index: 10;
+  }
+  #coinDisplay {
+    left: 10px;
+  }
+  #distanceDisplay {
+    right: 10px;
+  }
+  #titleScreen {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    background: skyblue;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 20;
+  }
+  #titleScreen h1 {
+    font-size: 48px;
+    margin-bottom: 20px;
+  }
+  #startButton {
+    font-size: 20px;
+    padding: 10px 20px;
+    background: deepskyblue;
+    border: 2px solid navy;
+    color: white;
+    cursor: pointer;
+    user-select: none;
+  }
+  .snail-decoration {
+    font-size: 36px;
+  }
+  #shopMenu {
+    position: absolute;
+    top: 50px;
+    left: 10px;
+    background: white;
+    border: 2px solid black;
+    padding: 10px;
+    max-width: 220px;
+    display: none;
+    z-index: 15;
+  }
+  #shopMenu button {
+    width: 100%;
+    margin: 5px 0;
+    padding: 6px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<div id="titleScreen">
+  <div class="snail-decoration">🐌🐌</div>
+  <h1>Flungus 2</h1>
+  <button id="startButton">Start Game</button>
+  <div class="snail-decoration">🐌🐌</div>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+<button id="launchButton">Launch Snail</button>
+<button id="shopButton">Shop</button>
+<div id="coinDisplay">🪙 0</div>
+<div id="distanceDisplay">Distance: 0 m</div>
+<div id="shopMenu"></div>
+
+<script>
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // Game variables
+  let snail = { x: canvas.width / 2, y: 100, vy: 0, vx: 0 }; // Start snail above ground
+  const groundLevel = 100; // Ground is at y=100 (positive Y goes down from snail's perspective)
+  const grassHeight = 80;
+  let gravity = 0.5;
+  let launched = false;
+  let coins = 0;
+  let maxHeight = groundLevel; // Start max height at ground level
+
+  // Camera position follows snail with smooth interpolation
+  let cameraX = snail.x;
+  let cameraY = groundLevel;
+  const cameraSmoothing = 0.05; // Lower values = smoother but slower following
+
+  // Clouds array with more natural distribution
+  let clouds = [];
+  for(let i=0; i<15; i++){
+    clouds.push({
+      x: Math.random() * canvas.width * 4 - canvas.width, // Much wider spread
+      y: Math.random() * canvas.height * 0.8 + 50, // Vary heights more naturally
+      speedX: 0.2 + Math.random() * 0.6, // Horizontal drift speed
+      speedY: (Math.random() - 0.5) * 0.1, // Slight vertical drift
+      size: 0.8 + Math.random() * 0.4, // Size variation
+      opacity: 0.6 + Math.random() * 0.4, // Opacity variation
+      driftPhase: Math.random() * Math.PI * 2 // For wave-like movement
+    });
+  }
+
+  // Infinite star generation system
+  let stars = new Map(); // Use Map for efficient adding/removing
+  let starSeed = 12345; // Seed for consistent star placement
+  
+  // Simple pseudo-random number generator for consistent star placement
+  function seededRandom(seed) {
+    const x = Math.sin(seed) * 10000;
+    return x - Math.floor(x);
+  }
+
+  // Generate stars in a region around the camera
+  function generateStarsInRegion(centerX, centerY, radius) {
+    const gridSize = 200; // Grid size for star placement
+    const minX = Math.floor((centerX - radius) / gridSize);
+    const maxX = Math.floor((centerX + radius) / gridSize);
+    const minY = Math.floor((centerY - radius) / gridSize);
+    const maxY = Math.floor((centerY + radius) / gridSize);
+
+    for(let gx = minX; gx <= maxX; gx++) {
+      for(let gy = minY; gy <= maxY; gy++) {
+        const key = `${gx},${gy}`;
+        if(!stars.has(key)) {
+          // Generate consistent stars for this grid cell
+          const baseSeed = gx * 1000 + gy * 100000;
+          const starCount = Math.floor(seededRandom(baseSeed) * 8) + 2; // 2-9 stars per grid cell
+          
+          const cellStars = [];
+          for(let i = 0; i < starCount; i++) {
+            const seed = baseSeed + i;
+            cellStars.push({
+              x: gx * gridSize + seededRandom(seed * 2) * gridSize,
+              y: gy * gridSize + seededRandom(seed * 3) * gridSize,
+              brightness: seededRandom(seed * 4) * 0.8 + 0.2,
+              twinkle: seededRandom(seed * 5) * Math.PI * 2
+            });
+          }
+          stars.set(key, cellStars);
+        }
+      }
+    }
+
+    // Remove stars that are too far away to save memory
+    const removeDistance = radius * 2;
+    for(let [key, cellStars] of stars) {
+      const [gx, gy] = key.split(',').map(Number);
+      const cellCenterX = gx * gridSize + gridSize / 2;
+      const cellCenterY = gy * gridSize + gridSize / 2;
+      const distance = Math.sqrt((cellCenterX - centerX) ** 2 + (cellCenterY - centerY) ** 2);
+      
+      if(distance > removeDistance) {
+        stars.delete(key);
+      }
+    }
+  }
+
+  // Planet system - appears at very high altitudes
+  let planets = new Map();
+  const planetEmojis = ['🪐', '🌍', '🌎', '🌏', '🌕', '🌖', '🌗', '🌘', '🌑', '🌒', '🌓', '🌔', '☀️', '🌙', '⭐'];
+
+  function generatePlanetsInRegion(centerX, centerY, radius) {
+    const gridSize = 400; // Smaller grid for more planets
+    const minX = Math.floor((centerX - radius) / gridSize);
+    const maxX = Math.floor((centerX + radius) / gridSize);
+    const minY = Math.floor((centerY - radius) / gridSize);
+    const maxY = Math.floor((centerY + radius) / gridSize);
+
+    for(let gx = minX; gx <= maxX; gx++) {
+      for(let gy = minY; gy <= maxY; gy++) {
+        const key = `${gx},${gy}`;
+        if(!planets.has(key)) {
+          const baseSeed = gx * 7331 + gy * 9973; // Different seed from stars
+          
+          // 40% chance of having a planet in this grid cell when dark
+          if(seededRandom(baseSeed) < 0.4) {
+            const planet = {
+              x: gx * gridSize + seededRandom(baseSeed * 2) * gridSize,
+              y: gy * gridSize + seededRandom(baseSeed * 3) * gridSize,
+              emoji: planetEmojis[Math.floor(seededRandom(baseSeed * 4) * planetEmojis.length)],
+              size: 25 + seededRandom(baseSeed * 5) * 35, // Size 25-60
+              rotation: seededRandom(baseSeed * 6) * Math.PI * 2,
+              rotationSpeed: (seededRandom(baseSeed * 7) - 0.5) * 0.03
+            };
+            planets.set(key, planet);
+          }
+        }
+      }
+    }
+
+    // Remove distant planets
+    const removeDistance = radius * 2;
+    for(let [key, planet] of planets) {
+      const distance = Math.sqrt((planet.x - centerX) ** 2 + (planet.y - centerY) ** 2);
+      if(distance > removeDistance) {
+        planets.delete(key);
+      }
+    }
+  }
+
+  // Power-ups with level and scaling effect
+  const powerUps = [
+    { name: 'Launch Power', baseCost: 5, level: 0, cost() { return Math.floor(this.baseCost * Math.pow(1.5, this.level)); }, 
+      applyEffect() { launchPower = 20 + this.level * 8; } },
+    { name: 'Low Gravity', baseCost: 8, level: 0, cost() { return Math.floor(this.baseCost * Math.pow(1.6, this.level)); }, 
+      applyEffect() { gravity = Math.max(0.1, 0.5 - this.level * 0.04); } },
+    { name: 'Coin Multiplier', baseCost: 15, level: 0, cost() { return Math.floor(this.baseCost * Math.pow(1.8, this.level)); },
+      applyEffect() { coinMultiplier = 1 + this.level * 0.5; } },
+    { name: 'Air Resistance', baseCost: 12, level: 0, cost() { return Math.floor(this.baseCost * Math.pow(1.7, this.level)); },
+      applyEffect() { airResistance = Math.max(0.98, 1 - this.level * 0.005); } },
+    { name: 'Launch Angle', baseCost: 20, level: 0, cost() { return Math.floor(this.baseCost * Math.pow(1.4, this.level)); },
+      applyEffect() { launchAngle = this.level * 5; } },
+    { name: 'Snail Size', baseCost: 25, level: 0, cost() { return Math.floor(this.baseCost * Math.pow(1.3, this.level)); },
+      applyEffect() { snailSize = 64 + this.level * 16; } }
+  ];
+
+  // Initialize upgrade effect variables
+  let launchPower = 20;    // Initial launch velocity magnitude
+  let coinMultiplier = 1;  // Multiplier for coin rewards
+  let airResistance = 1;   // Air resistance factor (1 = no resistance)
+  let launchAngle = 0;     // Launch angle in degrees
+  let snailSize = 64;      // Snail emoji size
+
+  // DOM elements
+  const titleScreen = document.getElementById('titleScreen');
+  const startButton = document.getElementById('startButton');
+  const launchButton = document.getElementById('launchButton');
+  const shopButton = document.getElementById('shopButton');
+  const coinDisplay = document.getElementById('coinDisplay');
+  const distanceDisplay = document.getElementById('distanceDisplay');
+  const shopMenu = document.getElementById('shopMenu');
+
+  // Start button click handler
+  startButton.addEventListener('click', () => {
+    titleScreen.style.display = 'none';
+    launchButton.style.display = 'block';
+    shopButton.style.display = 'block';
+  });
+
+  // Launch button click handler
+  launchButton.addEventListener('click', () => {
+    if(!launched){
+      // Apply launch angle
+      const angleRad = (launchAngle * Math.PI) / 180;
+      snail.vy = -launchPower * Math.cos(angleRad);
+      snail.vx = launchPower * Math.sin(angleRad);
+      launched = true;
+      maxHeight = snail.y;
+    }
+  });
+
+  // Shop button toggles menu
+  shopButton.addEventListener('click', () => {
+    if(shopMenu.style.display === 'block') {
+      shopMenu.style.display = 'none';
+    } else {
+      shopMenu.style.display = 'block';
+      renderShop();
+    }
+  });
+
+  // Render shop buttons with upgrade levels and costs
+  function renderShop() {
+    shopMenu.innerHTML = '';
+    powerUps.forEach((item, idx) => {
+      const btn = document.createElement('button');
+      btn.textContent = `${item.name} (Lvl ${item.level}) - 🪙 ${item.cost()}`;
+      btn.disabled = coins < item.cost();
+      btn.onclick = () => {
+        if(coins >= item.cost()){
+          coins -= item.cost();
+          item.level++;
+          coinDisplay.textContent = `🪙 ${coins}`;
+          item.applyEffect();
+          renderShop();
+        }
+      };
+      shopMenu.appendChild(btn);
+    });
+  }
+
+  // Draw functions
+  function drawBackground() {
+    // Sky gradient - gets darker as snail goes higher
+    let heightRatio = Math.min(1, Math.max(0, (groundLevel - snail.y) / 2000));
+    let r = 135 * (1 - heightRatio) + 5 * heightRatio;
+    let g = 206 * (1 - heightRatio) + 5 * heightRatio;
+    let b = 235 * (1 - heightRatio) + 20 * heightRatio;
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Generate and draw infinite stars when it gets dark (high altitude)
+    const currentHeight = Math.max(0, groundLevel - snail.y);
+    if(currentHeight > 300) { // Start showing stars at 300m height
+      // Generate stars in screen space around camera position
+      const viewRadius = Math.max(canvas.width, canvas.height) * 1.2;
+      generateStarsInRegion(cameraX, cameraY, viewRadius);
+      
+      // Draw stars
+      const starOpacityBase = Math.min(1, (currentHeight - 300) / 500);
+      
+      for(let [key, cellStars] of stars) {
+        for(let star of cellStars) {
+          // Update twinkling animation
+          star.twinkle += 0.1;
+          
+          // Calculate star position in screen coordinates
+          const starX = star.x - cameraX + canvas.width / 2;
+          const starY = star.y - cameraY + canvas.height / 2;
+          
+          // Only draw if star is visible on screen (with margin)
+          if(starX > -50 && starX < canvas.width + 50 && starY > -50 && starY < canvas.height + 50) {
+            const starOpacity = starOpacityBase * star.brightness;
+            
+            if(starOpacity > 0.1) {
+              // Add twinkling effect
+              const twinkleEffect = 0.5 + 0.5 * Math.sin(star.twinkle);
+              const finalOpacity = starOpacity * (0.7 + 0.3 * twinkleEffect);
+              
+              ctx.globalAlpha = finalOpacity;
+              ctx.fillStyle = 'white';
+              
+              ctx.beginPath();
+              ctx.arc(starX, starY, 1 + star.brightness * 0.5, 0, Math.PI*2);
+              ctx.fill();
+              
+              // Add sparkle effect for brightest stars
+              if(star.brightness > 0.8 && twinkleEffect > 0.8) {
+                ctx.globalAlpha = finalOpacity * 0.3;
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(starX - 4, starY);
+                ctx.lineTo(starX + 4, starY);
+                ctx.moveTo(starX, starY - 4);
+                ctx.lineTo(starX, starY + 4);
+                ctx.stroke();
+              }
+            }
+          }
+        }
+      }
+      ctx.globalAlpha = 1; // Reset alpha
+    }
+
+    // Generate and draw planets when screen gets dark
+    if(currentHeight > 800) { // Planets appear when it gets dark (800m+)
+      const viewRadius = Math.max(canvas.width, canvas.height) * 1.5;
+      generatePlanetsInRegion(cameraX, cameraY, viewRadius);
+      
+      // Draw planets
+      const planetOpacity = Math.min(1, (currentHeight - 800) / 600);
+      ctx.globalAlpha = planetOpacity;
+      
+      for(let [key, planet] of planets) {
+        // Update planet rotation
+        planet.rotation += planet.rotationSpeed;
+        
+        // Calculate planet position in screen coordinates with slight parallax
+        const planetX = planet.x - cameraX * 0.8 + canvas.width / 2;
+        const planetY = planet.y - cameraY * 0.8 + canvas.height / 2;
+        
+        // Only draw if planet is visible on screen (with margin)
+        if(planetX > -100 && planetX < canvas.width + 100 && planetY > -100 && planetY < canvas.height + 100) {
+          ctx.save();
+          ctx.translate(planetX, planetY);
+          ctx.rotate(planet.rotation);
+          ctx.font = `${planet.size}px serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(planet.emoji, 0, 0);
+          ctx.restore();
+        }
+      }
+      ctx.globalAlpha = 1; // Reset alpha
+    }
+
+    // Clouds - more natural movement with vertical drift and wave patterns
+    if(heightRatio < 0.7) { // Hide clouds at very high altitude
+      clouds.forEach(cloud => {
+        // Update cloud position with natural drift
+        cloud.x -= cloud.speedX;
+        cloud.y += cloud.speedY + Math.sin(cloud.driftPhase) * 0.05; // Wave-like vertical movement
+        cloud.driftPhase += 0.02;
+        
+        // Reset cloud position when it goes off screen
+        if(cloud.x < cameraX - canvas.width - 200) {
+          cloud.x = cameraX + canvas.width + Math.random() * 400;
+          cloud.y = Math.random() * canvas.height * 0.8 + 50;
+          cloud.speedX = 0.2 + Math.random() * 0.6;
+          cloud.speedY = (Math.random() - 0.5) * 0.1;
+        }
+        
+        // Draw cloud with camera offset and natural parallax
+        const cloudX = cloud.x - cameraX * 0.3;
+        const cloudY = cloud.y - cameraY * 0.2;
+        
+        // Only draw if cloud is reasonably close to screen
+        if(cloudX > -150 && cloudX < canvas.width + 150) {
+          ctx.globalAlpha = (1 - heightRatio) * cloud.opacity;
+          ctx.fillStyle = 'white';
+          
+          // Draw cloud with size variation
+          const baseSize = 30 * cloud.size;
+          ctx.beginPath();
+          ctx.arc(cloudX, cloudY, baseSize, 0, Math.PI*2);
+          ctx.arc(cloudX + 25 * cloud.size, cloudY - 10 * cloud.size, baseSize * 1.3, 0, Math.PI*2);
+          ctx.arc(cloudX + 60 * cloud.size, cloudY, baseSize, 0, Math.PI*2);
+          ctx.arc(cloudX + 35 * cloud.size, cloudY + 15 * cloud.size, baseSize * 0.8, 0, Math.PI*2);
+          ctx.fill();
+        }
+      });
+      ctx.globalAlpha = 1; // Reset alpha
+    }
+
+    // Draw dirt under grass with better texture
+    const grassScreenY = canvas.height / 2 + (groundLevel - cameraY);
+    const dirtHeight = 200;
+    
+    // Draw main dirt layer
+    ctx.fillStyle = '#8B4513';
+    ctx.fillRect(0, grassScreenY, canvas.width, dirtHeight);
+    
+    // Add layered dirt texture with camera offset
+    ctx.fillStyle = '#654321';
+    for(let layer = 0; layer < 3; layer++) {
+      for(let i = -canvas.width; i < canvas.width * 2; i += 40) {
+        const x = i - (cameraX % 40) + Math.sin((i + layer * 100) * 0.01) * 10;
+        const y = grassScreenY + layer * 60 + Math.sin(i * 0.02) * 15;
+        if(y < grassScreenY + dirtHeight && x > -50 && x < canvas.width + 50) {
+          ctx.fillRect(x, y, 30 + Math.random() * 20, 8 + Math.random() * 8);
+        }
+      }
+    }
+
+    // Draw grass at ground level relative to camera with extended coverage
+    ctx.fillStyle = 'green';
+    ctx.beginPath();
+    for(let i = -20; i < canvas.width / 100 + 20; i++) {
+      let offsetX = i * 100 - (cameraX % 100);
+      ctx.ellipse(offsetX, grassScreenY, 150, grassHeight/2, 0, 0, Math.PI * 2);
+    }
+    ctx.fill();
+
+    // Add tiny grass bumps for texture
+    ctx.fillStyle = '#228B22'; // Darker green for bumps
+    for(let i = -canvas.width; i < canvas.width * 2; i += 15) {
+      const x = i - (cameraX % 15);
+      const y = grassScreenY - 5 + Math.sin(i * 0.1) * 3; // Small height variation
+      
+      // Create small grass bumps
+      ctx.beginPath();
+      ctx.ellipse(x, y, 8 + Math.sin(i * 0.03) * 3, 4 + Math.sin(i * 0.05) * 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      
+      // Add even smaller detail bumps
+      if(i % 30 === 0) {
+        ctx.fillStyle = '#32CD32'; // Lighter green for highlights
+        ctx.beginPath();
+        ctx.ellipse(x + 3, y - 2, 3, 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#228B22'; // Reset to darker green
+      }
+    }
+  }
+
+  function drawSnail() {
+    // Snail is always drawn at the center of the screen since camera follows it
+    const snailScreenX = canvas.width / 2;
+    const snailScreenY = canvas.height / 2;
+
+    ctx.font = `${snailSize}px serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('🐌', snailScreenX, snailScreenY);
+  }
+
+  // Update physics and game logic
+  function update() {
+    if(launched) {
+      // Apply gravity
+      snail.vy += gravity;
+      
+      // Apply air resistance
+      snail.vy *= airResistance;
+      snail.vx *= airResistance;
+      
+      // Update position
+      snail.y += snail.vy;
+      snail.x += snail.vx;
+
+      // Track max height reached (lowest Y value since we go up)
+      if(snail.y < maxHeight) maxHeight = snail.y;
+
+      // When hitting ground, award coins and reset
+      if(snail.y >= groundLevel) {
+        snail.y = groundLevel;
+        
+        // Award coins based on max height reached during this flight
+        const heightReached = groundLevel - maxHeight;
+        if(heightReached > 10) {
+          const earned = Math.floor((heightReached / 10) * coinMultiplier);
+          coins += earned;
+          coinDisplay.textContent = `🪙 ${coins}`;
+        }
+
+        // Reset snail state
+        snail.vy = 0;
+        snail.vx = 0;
+        launched = false;
+        maxHeight = groundLevel;
+        distanceDisplay.textContent = `Distance: 0 m`;
+      }
+
+      // Update distance meter during flight
+      if(launched) {
+        const currentHeight = Math.max(0, groundLevel - snail.y);
+        distanceDisplay.textContent = `Distance: ${Math.floor(currentHeight)} m`;
+      }
+    }
+
+    // Smooth camera following
+    const targetCameraX = snail.x;
+    const targetCameraY = snail.y;
+    
+    cameraX += (targetCameraX - cameraX) * cameraSmoothing;
+    cameraY += (targetCameraY - cameraY) * cameraSmoothing;
+  }
+
+  // Game loop
+  function gameLoop() {
+    update();
+
+    drawBackground();
+    drawSnail();
+
+    requestAnimationFrame(gameLoop);
+  }
+
+  gameLoop();
+</script>
+
+</body>
+</html>
